@@ -4,8 +4,10 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
+	"math"
 	"net"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"smart-agent/config"
@@ -156,6 +158,9 @@ func repl(cli AgentClient, eofCh chan bool) {
 			cli.disconnect()
 			eofCh <- true
 			return
+		case ".trans":
+			policyName := tokens[1]
+			cli.chTransPolicy(policyName)
 		case ".service":
 			cli.showService()
 		case ".connect":
@@ -190,6 +195,7 @@ func printHelp(role string) {
 The commands and arguments are:
     .help
     .exit
+    .trans    [policyName]
     .service
     .connect  [serviceName]
     .send     [data]
@@ -261,15 +267,55 @@ func (cli *AgentClient) updateServerInfo() {
 	cli.serverInfo = serverInfo
 }
 
+// 新增传输策略选择
+func (cli *AgentClient) chTransPolicy(policyName string) {
+	switch policyName {
+	case "fullmesh":
+		cmd := exec.Command("sysctl", "-w", "net.mptcp.mptcp_path_manager=fullmesh")
+		err := cmd.Run()
+		if err != nil {
+			fmt.Println("Error executing fullmesh command:", err)
+		}
+	case "backup":
+		cmd := exec.Command("ip", "link", "set", "dev", "ens33", "multipath", "backup")
+		err := cmd.Run()
+		if err != nil {
+			fmt.Println("Error executing backup command:", err)
+		}
+	case "redundant":
+		cmd := exec.Command("sysctl", "-w", "net.mptcp.mptcp_scheduler=redundant")
+		err := cmd.Run()
+		if err != nil {
+			fmt.Println("Error executing redundant command:", err)
+		}
+	case "default":
+		cmd1 := exec.Command("sysctl", "-w", "net.mptcp.mptcp_path_manager=default")
+		cmd2 := exec.Command("ip", "link", "set", "dev", "ens33", "multipath", "off")
+		cmd3 := exec.Command("sysctl", "-w", "net.mptcp.mptcp_scheduler=default")
+
+		err1 := cmd1.Run()
+		err2 := cmd2.Run()
+		err3 := cmd3.Run()
+
+		if err1 != nil || err2 != nil || err3 != nil {
+			fmt.Println("Error executing default command")
+		}
+	default:
+		fmt.Println("The transport policy does not exist")
+	}
+
+}
+
 func (cli *AgentClient) showService() {
 	cli.updateServerInfo()
-	headers := []string{"Service Name", "Proxy IP", "Delay"}
-	fmt.Printf("%-20s %-25s %-15s\n", headers[0], headers[1], headers[2])
-	fmt.Println(strings.Repeat("-", 60))
+	headers := []string{"Service Name", "Proxy IP", "Delay", "Latency jitter"}
+	fmt.Printf("%-20s %-25s %-15s %-15s\n", headers[0], headers[1], headers[2], headers[3])
+	fmt.Println(strings.Repeat("-", 70))
 	for _, info := range cli.serverInfo {
-		fmt.Printf("%-20s %-25s %-15s\n", info.serviceName, fmt.Sprintf("%s:%d", cli.k8sIp, info.proxyPort),
-			fmt.Sprintf("%.3fms", float64(info.delay.Abs().Microseconds())/1000))
+		fmt.Printf("%-20s %-25s %-15s %-15s\n", info.serviceName, fmt.Sprintf("%s:%d", cli.k8sIp, info.proxyPort),
+			fmt.Sprintf("%.3fms", float64(info.delay.Abs().Microseconds())/1000), fmt.Sprintf("%.3f", cli.getPingDelayJitter(info.pingPort)))
 	}
+	fmt.Println(strings.Repeat("-", 70))
 }
 
 func (cli *AgentClient) sendData(data string) {
@@ -342,6 +388,43 @@ func (cli *AgentClient) getPingDelay(port int32) (time.Duration, error) {
 
 	elapsed := time.Since(start)
 	return elapsed, nil
+}
+
+func (cli *AgentClient) getPingDelayJitter(port int32) float64 {
+	//use getPingDelay * 5
+	var pingDelay []float64
+	for i := 0; i < 5; i++ {
+		delay, err := cli.getPingDelay(port)
+		if err != nil {
+			fmt.Println("Error using getPingDelay func:", err)
+			continue
+		}
+		//fmt.Println(delay)
+		mDelay := float64(delay) / 1000000 //将数值转换为ms
+		//fmt.Println(mDelay)
+		pingDelay = append(pingDelay, mDelay)
+	}
+	if len(pingDelay) == 0 {
+		fmt.Println("Error using getPingDelay func:")
+		return math.Inf(1) //返回正无穷大
+	}
+	//计算平均时延
+	sumDelay := 0.0
+	for _, data := range pingDelay {
+		sumDelay += data
+	}
+	meanDelay := sumDelay / float64(len(pingDelay))
+
+	//计算平方差和
+	squaredDifferencesSum := 0.0
+	for _, delay := range pingDelay {
+		squaredDifferences := (delay - meanDelay) * (delay - meanDelay)
+		squaredDifferencesSum += squaredDifferences
+	}
+
+	//计算方差
+	variance := squaredDifferencesSum / float64(len(pingDelay))
+	return variance
 }
 
 func (cli *AgentClient) connectToService(svcName string) {

@@ -6,8 +6,8 @@ import (
 )
 
 func TestService(t *testing.T) {
-	cli := NewK8SClient("/home/zds/.kube/config")
-	fmt.Println(cli.GetNamespaceServices("default"))
+	cli := NewK8SClient("/home/yf/.kube/config")
+	fmt.Println(cli.GetNameSpacePods("smart-agent"))
 }
 
 func TestRemoteK8sService(t *testing.T) {

@@ -13,9 +13,10 @@ spec:
       labels:
         app: proxy-app
     spec:
+      serviceAccountName: smart-agent-reader
       containers:
         - name: my-agent
-          image: docker.io/zdszero/my-agent:latest
+          image: docker.io/nogodmessi/smart-agent:latest
           ports:
             - containerPort: 8081
               protocol: TCP
@@ -23,6 +24,7 @@ spec:
               protocol: TCP
             - containerPort: 8083
               protocol: UDP
+            
 
 ---
 apiVersion: v1
@@ -59,3 +61,4 @@ spec:
       protocol: TCP
       port: 8082
       targetPort: 8082
+    

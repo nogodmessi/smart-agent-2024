@@ -32,6 +32,11 @@ type Service struct {
 	Ports     []PortInfo
 }
 
+type Pod struct {
+	PodName string
+	PodIP   string
+}
+
 func NewK8SClient(kubeconfig string) *K8SClient {
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
 	loadingRules.ExplicitPath = kubeconfig
@@ -89,6 +94,28 @@ func (k8s *K8SClient) GetNamespaceServices(namespace string) []Service {
 			cur.Ports = append(cur.Ports, p)
 		}
 		ret = append(ret, cur)
+	}
+	return ret
+}
+
+func (k8s *K8SClient) GetNameSpacePods(namespace string) []Pod {
+	var ret []Pod
+	pods, err := k8s.cli.CoreV1().Pods(namespace).List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		log.Fatalln("Error getting pods: ", err)
+		os.Exit(1)
+	}
+	prefix := "proxy-deployment" //匹配前缀
+	templateName := "proxy-service"
+	for _, pod := range pods.Items {
+		if ip := pod.Status.PodIP; ip != "" && len(pod.Name) >= len(prefix) && pod.Name[:len(prefix)] == prefix {
+			newName := templateName + string(pod.Name[len(prefix)])
+			cur := Pod{
+				PodIP:   ip,
+				PodName: newName,
+			}
+			ret = append(ret, cur)
+		}
 	}
 	return ret
 }

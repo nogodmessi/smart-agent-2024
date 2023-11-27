@@ -13,6 +13,7 @@ spec:
       labels:
         app: proxy-app
     spec:
+      serviceAccountName: smart-agent-reader
       containers:
         - name: my-agent
           image: my-agent

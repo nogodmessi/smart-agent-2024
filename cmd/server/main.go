@@ -1,14 +1,18 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log"
 	"net"
+	"os"
+	"os/exec"
 	"smart-agent/config"
 	"smart-agent/service"
 	"smart-agent/util"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -62,7 +66,7 @@ func main() {
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(3)
+	wg.Add(4)
 
 	go func() {
 		defer wg.Done()
@@ -127,6 +131,16 @@ func main() {
 				log.Println("Error sending pong:", err)
 			}
 		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		for {
+			time.Sleep(20 * time.Second)
+			go ser.GetNetworkAwareness()
+
+		}
+
 	}()
 
 	wg.Wait()
@@ -492,4 +506,112 @@ func (ser *AgentServer) handleTransfer(conn net.Conn) {
 			}
 		}
 	}
+}
+
+// 只能确定server先获取每个server的ip，如何进行测试
+func (ser *AgentServer) GetNetworkAwareness() {
+	servers := ser.k8sCli.GetNameSpacePods(config.Namespace)
+	ch := make(chan string, len(servers)-1)
+	localIpaddr := getIPv4ForInterface("eth0")
+
+	localServerName := ""
+	for _, server := range servers {
+		if localIpaddr == server.PodIP {
+			localServerName = server.PodName
+		}
+	}
+
+	for _, server := range servers {
+		serverIp := server.PodIP
+		serverName := server.PodName
+		if localIpaddr != serverIp {
+			result, err := runIperfCommand(serverIp)
+			packetLoss, avgRTT, err := runPingCommand(serverIp)
+			if err == nil {
+				ch <- fmt.Sprintf("%s - %s: %s - Packet Loss - %s, Average RTT - %s\n", localServerName, serverName, result, packetLoss, avgRTT)
+			} else {
+				ch <- fmt.Sprintf("%s\n", err)
+			}
+		}
+	}
+
+	var result strings.Builder
+	for i := 0; i < len(servers)-1; i++ {
+		result.WriteString(<-ch)
+	}
+	err := os.WriteFile("data.txt", []byte(result.String()), 0644)
+	if err != nil {
+		fmt.Println("Error writing to file:", err)
+	}
+}
+
+// 实现客户端发送iperf命令 （测试吞吐量以及带宽）
+func runIperfCommand(serverIp string) (string, error) {
+	cmd := exec.Command("iperf", "-c", serverIp, "-t", "1")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		fmt.Println("Error running iperf command:", err)
+		return "", err
+	}
+	lastline := extractLastLine(string(output))
+	return lastline, err
+}
+
+func extractLastLine(output string) string {
+	lines := strings.Split(output, "\n")
+	if len(lines) > 0 {
+		return lines[len(lines)-2]
+	}
+	return ""
+}
+
+// 实现客户端发送ping命令（测4次的平均时延以及数据丢失率）
+func runPingCommand(serverIp string) (string, string, error) {
+	cmd := exec.Command("ping", "-c", "4", serverIp)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	err := cmd.Run()
+	if err != nil {
+		return "", "", err
+	}
+	output := out.String()
+	lines := strings.Split(output, "\n")
+	fmt.Println(len(lines))
+	packetLossLine := lines[len(lines)-3]
+	statisticsLine := lines[len(lines)-2]
+
+	packetLoss := strings.Split(packetLossLine, ",")[2]
+	packetLoss = strings.TrimSpace(strings.Split(packetLoss, " ")[1])
+
+	avgRTT := strings.Split(statisticsLine, "/")[4]
+	//fmt.Println("Packet Loss:", packetLoss)
+	//fmt.Println("Average RTT:", avgRTT)
+	return packetLoss, avgRTT, nil
+}
+
+func getIPv4ForInterface(ifaceName string) string {
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return ""
+	}
+
+	for _, iface := range interfaces {
+		if iface.Name == ifaceName {
+			addrs, err := iface.Addrs()
+			if err != nil {
+				return ""
+			}
+
+			for _, addr := range addrs {
+				ipNet, ok := addr.(*net.IPNet)
+				if ok && !ipNet.IP.IsLoopback() {
+					if ipNet.IP.To4() != nil {
+						return ipNet.IP.String()
+					}
+				}
+			}
+		}
+	}
+
+	return ""
 }
