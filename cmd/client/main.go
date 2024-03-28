@@ -4,12 +4,14 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
+	"k8s.io/client-go/util/homedir"
 	"math"
 	"net"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"smart-agent/config"
 	"smart-agent/service"
 	"smart-agent/util"
@@ -17,8 +19,6 @@ import (
 	"strings"
 	"syscall"
 	"time"
-
-	"k8s.io/client-go/util/homedir"
 )
 
 type ServerInfo struct {
@@ -172,6 +172,8 @@ func repl(cli AgentClient, eofCh chan bool) {
 			cli.sendData(tokens[1])
 		case ".sendfile":
 			cli.sendFile(tokens[1])
+		case ".sendfileToNode":
+			cli.sendFileToNode(tokens[1])
 		case ".fetch":
 			var fetchClient string
 			if len(tokens) == 1 {
@@ -200,6 +202,7 @@ The commands and arguments are:
     .connect  [serviceName]
     .send     [data]
     .sendfile [filePath]
+    .sendfileToNode [filePath]
     .fetch    [clientId]
 `, os.Args[0])
 	} else if role == config.RoleReceiver {
@@ -238,30 +241,35 @@ func (cli *AgentClient) updateServerInfo() {
 	serverNum := len(cli.k8sSvc) / 2
 	serverInfo := make([]ServerInfo, serverNum)
 	for _, svc := range cli.k8sSvc {
-		lastChar := svc.SvcName[len(svc.SvcName)-1]
-		lastDigit, err := strconv.Atoi(string(lastChar))
-		lastDigit--
+		re := regexp.MustCompile("\\d+")
+		match := re.FindString(svc.SvcName)
+		if match == "" {
+			fmt.Println("Error extracting number from service name:", svc.SvcName)
+			continue
+		}
+		Digit, err := strconv.Atoi(string(match))
+		Digit--
 		if err != nil {
 			fmt.Println("Atoi Error:", err)
 			continue
 		}
 		if strings.HasPrefix(svc.SvcName, config.ProxyServicePrefix) {
-			serverInfo[lastDigit].serviceIp = svc.ClusterIp
-			serverInfo[lastDigit].serviceName = svc.SvcName
+			serverInfo[Digit].serviceIp = svc.ClusterIp
+			serverInfo[Digit].serviceName = svc.SvcName
 			for _, portInfo := range svc.Ports {
 				if portInfo.Name == "client-port" {
-					serverInfo[lastDigit].proxyPort = portInfo.NodePort
+					serverInfo[Digit].proxyPort = portInfo.NodePort
 				} else if portInfo.Name == "ping-port" {
 					pingPort := portInfo.NodePort
-					serverInfo[lastDigit].pingPort = pingPort
-					serverInfo[lastDigit].delay, err = cli.getPingDelay(pingPort)
+					serverInfo[Digit].pingPort = pingPort
+					serverInfo[Digit].delay, err = cli.getPingDelay(pingPort)
 					if err != nil {
 						fmt.Printf("fail to ping server on port %d\n", pingPort)
 					}
 				}
 			}
 		} else if strings.HasPrefix(svc.SvcName, config.ClusterServicePrefix) {
-			serverInfo[lastDigit].transferIp = svc.ClusterIp
+			serverInfo[Digit].transferIp = svc.ClusterIp
 		}
 	}
 	cli.serverInfo = serverInfo
@@ -546,6 +554,33 @@ func (cli *AgentClient) sendFile(filePath string) {
 		line := scanner.Text()
 		util.SendNetMessage(cli.conn, config.ClientData, line)
 	}
+}
+
+func (cli *AgentClient) sendFileToNode(filePath string) {
+	if cli.conn == nil {
+		return
+	}
+	// Open the file for reading
+	file, err := os.Open(filePath)
+	if err != nil {
+		fmt.Println("Failed to open file:", err)
+		return
+	}
+	defer file.Close()
+
+	// Create a scanner to read the file line by line
+	scanner := bufio.NewScanner(file)
+
+	// Create a conn Between server and Node
+	util.SendNetMessage(cli.conn, config.CreateConnBetweenServerAndNode, "")
+
+	// Read the file line by line
+	for scanner.Scan() {
+		line := scanner.Text()
+		util.SendNetMessage(cli.conn, config.ClientDataToLocal, line)
+	}
+	// disconn Between server and Node
+	util.SendNetMessage(cli.conn, config.CreateConnBetweenServerAndNode, "")
 }
 
 func (cli *AgentClient) fetchClientData(clientId string) {

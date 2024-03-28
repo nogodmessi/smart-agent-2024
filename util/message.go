@@ -10,11 +10,16 @@ func SendNetMessage(conn net.Conn, cmd uint32, data string) {
 	if conn == nil {
 		log.Panicln("conn cannot be nil")
 	}
-	totalLength := 4 + 4 + len(data)
+	totalLength := 4 + 4
+	if data != "" {
+		totalLength += len(data)
+	}
 	buf := make([]byte, totalLength)
 	binary.LittleEndian.PutUint32(buf, uint32(totalLength-4))
 	binary.LittleEndian.PutUint32(buf[4:], cmd)
-	copy(buf[8:], data)
+	if data != "" {
+		copy(buf[8:], data)
+	}
 	conn.Write(buf)
 }
 
@@ -41,4 +46,3 @@ func RecvNetMessage(conn net.Conn) (uint32, string) {
 	data := string(dataBuffer[4:])
 	return cmd, data
 }
-

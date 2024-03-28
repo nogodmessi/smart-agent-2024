@@ -73,7 +73,7 @@ deployNAgents() {
         sed "s/${DEPLOY}/\0${i}/" $deploy_file > $deploy_temp
         sed -i "s/${PROXY_SERVICE}/\0${i}/" $deploy_temp
         sed -i "s/${CLUSTER_SERVICE}/\0${i}/" $deploy_temp
-        sed -i "s/${SELECTOR_APP}/\0${i}/" $deploy_temp
+	    sed -i "s/${SELECTOR_APP}/\0${i}/" $deploy_temp
         $K apply -f $deploy_temp
         rm $deploy_temp
     done

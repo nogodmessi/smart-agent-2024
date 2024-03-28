@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net"
 	"os"
@@ -33,12 +34,13 @@ type SenderRecord struct {
 }
 
 type AgentServer struct {
-	redisCli    *redis.Client
-	myClusterIp string
-	senderMap   map[string]SenderRecord
-	bufferMap   map[string]SenderBuffer
-	k8sCli      *service.K8SClient
-	mu          sync.Mutex
+	redisCli     *redis.Client
+	myClusterIp  string
+	senderMap    map[string]SenderRecord
+	bufferMap    map[string]SenderBuffer
+	k8sCli       *service.K8SClient
+	mu           sync.Mutex
+	connWithNode net.Conn
 }
 
 func main() {
@@ -66,7 +68,7 @@ func main() {
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(4)
+	wg.Add(6)
 
 	go func() {
 		defer wg.Done()
@@ -136,9 +138,22 @@ func main() {
 	go func() {
 		defer wg.Done()
 		for {
-			time.Sleep(20 * time.Second)
-			go ser.GetNetworkAwareness()
+			ser.GetLossAwareness()
+		}
+	}()
 
+	go func() {
+		defer wg.Done()
+		for {
+			ser.GetBandwidthAwareness()
+			time.Sleep(1 * time.Second)
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		for {
+			ser.GetLatencyAwareness()
 		}
 
 	}()
@@ -371,6 +386,27 @@ func (ser *AgentServer) handleClient(conn net.Conn) {
 					util.SendNetMessage(conn, config.TransferData, data)
 				}
 				util.SendNetMessage(conn, config.TransferEnd, "")
+			} else if cmd == config.CreateConnBetweenServerAndNode {
+				// 读取node/ip.txt文件，获取本node的ip
+				nodeIP, err := ioutil.ReadFile("node/ip.txt")
+				if err != nil {
+					log.Println("Error reading node IP file :", err)
+					return
+				}
+				nodeAddr := strings.TrimSpace(string(nodeIP))
+				// 本云化代理与node建立连接（使用ip + 端口号），并把data发送给node
+				_, ser.connWithNode = util.CreateMptcpConnection(nodeAddr, config.ClientNode)
+				if ser.connWithNode == nil {
+					log.Fatalln("Failed to create connection when server transfer to node")
+				}
+			} else if cmd == config.ClientDataToLocal {
+				_, err := ser.connWithNode.Write([]byte(data))
+				if err != nil {
+					fmt.Println("Error sending data to node:", err)
+					return
+				}
+			} else if cmd == config.DisconnBetweenServerAndNode {
+				ser.connWithNode.Close()
 			}
 		}
 	} else if clientType == config.RoleReceiver {
@@ -508,10 +544,10 @@ func (ser *AgentServer) handleTransfer(conn net.Conn) {
 	}
 }
 
-// 只能确定server先获取每个server的ip，如何进行测试
-func (ser *AgentServer) GetNetworkAwareness() {
+// 进行带宽测试
+func (ser *AgentServer) GetBandwidthAwareness() {
 	servers := ser.k8sCli.GetNameSpacePods(config.Namespace)
-	ch := make(chan string, len(servers)-1)
+	ch := make(chan string, len(servers))
 	localIpaddr := getIPv4ForInterface("eth0")
 
 	localServerName := ""
@@ -520,26 +556,164 @@ func (ser *AgentServer) GetNetworkAwareness() {
 			localServerName = server.PodName
 		}
 	}
+	content, err1 := ioutil.ReadFile("node/node.txt")
+	if err1 != nil {
+		fmt.Println("Error reading file:", err1)
+		return
+	}
+	nodeName := strings.TrimSpace(string(content))
+	ser.k8sCli.EtcdPut(localServerName, nodeName)
 
+	var wg sync.WaitGroup // WaitGroup用于等待所有goroutine完成
 	for _, server := range servers {
 		serverIp := server.PodIP
 		serverName := server.PodName
 		if localIpaddr != serverIp {
-			result, err := runIperfCommand(serverIp)
-			packetLoss, avgRTT, err := runPingCommand(serverIp)
-			if err == nil {
-				ch <- fmt.Sprintf("%s - %s: %s - Packet Loss - %s, Average RTT - %s\n", localServerName, serverName, result, packetLoss, avgRTT)
-			} else {
-				ch <- fmt.Sprintf("%s\n", err)
-			}
+			wg.Add(1) // 增加WaitGroup的计数器
+
+			go func(serverIp, serverName string) {
+				defer wg.Done() // 减少WaitGroup的计数器
+
+				result, err := runIperfCommand(serverIp)
+				otherName, _ := ser.k8sCli.EtcdGet(serverName)
+				if err != nil {
+					result = "0Mbits/sec"
+				}
+				ch <- fmt.Sprintf("/%sand%s/bandwidth: %s\n", nodeName, otherName, result)
+			}(serverIp, serverName)
 		}
 	}
 
+	go func() {
+		wg.Wait() // 等待所有goroutine完成
+		close(ch) // 关闭通道，表示数据发送完成
+	}()
+
 	var result strings.Builder
-	for i := 0; i < len(servers)-1; i++ {
-		result.WriteString(<-ch)
+	for data := range ch {
+		result.WriteString(data)
 	}
-	err := os.WriteFile("data.txt", []byte(result.String()), 0644)
+
+	err := os.WriteFile("node/data2.txt", []byte(result.String()), 0644)
+	if err != nil {
+		fmt.Println("Error writing to file:", err)
+	}
+}
+
+// 丢包率测试
+func (ser *AgentServer) GetLossAwareness() {
+	servers := ser.k8sCli.GetNameSpacePods(config.Namespace)
+	ch := make(chan string, len(servers)*2)
+	localIpaddr := getIPv4ForInterface("eth0")
+
+	localServerName := ""
+	for _, server := range servers {
+		if localIpaddr == server.PodIP {
+			localServerName = server.PodName
+		}
+	}
+	content, err := ioutil.ReadFile("node/node.txt")
+	if err != nil {
+		fmt.Println("Error reading file:", err)
+		return
+	}
+
+	nodeName := strings.TrimSpace(string(content))
+
+	ser.k8sCli.EtcdPut(localServerName, nodeName)
+
+	var wg sync.WaitGroup // WaitGroup 用于等待所有 goroutine 完成
+	for _, server := range servers {
+		serverIP := server.PodIP
+		serverName := server.PodName
+		if localIpaddr != serverIP {
+			wg.Add(1) // 增加 WaitGroup 的计数器
+
+			go func(serverIP, serverName string) {
+				defer wg.Done() // 减少 WaitGroup 的计数器
+
+				packetLoss, _, err := runPingCommand(serverIP, "50", "0.01")
+
+				otherName, _ := ser.k8sCli.EtcdGet(serverName)
+				log.Println("Loss test %s", otherName)
+				if err != nil {
+					log.Println("Failed to get Loss:", err)
+					packetLoss = "100%"
+				}
+				ch <- fmt.Sprintf("/%sand%s/loss: %s\n", nodeName, otherName, packetLoss)
+			}(serverIP, serverName)
+		}
+	}
+
+	go func() {
+		wg.Wait() // 等待所有 goroutine 完成
+		close(ch) // 关闭通道，表示数据发送完成
+	}()
+
+	var result strings.Builder
+	for data := range ch {
+		result.WriteString(data)
+	}
+
+	err = os.WriteFile("node/data1.txt", []byte(result.String()), 0644)
+	if err != nil {
+		fmt.Println("Error writing to file:", err)
+	}
+}
+
+// 时延测试
+func (ser *AgentServer) GetLatencyAwareness() {
+	servers := ser.k8sCli.GetNameSpacePods(config.Namespace)
+	ch := make(chan string, len(servers))
+	localIpaddr := getIPv4ForInterface("eth0")
+
+	localServerName := ""
+	for _, server := range servers {
+		if localIpaddr == server.PodIP {
+			localServerName = server.PodName
+		}
+	}
+	content, err := ioutil.ReadFile("node/node.txt")
+	if err != nil {
+		fmt.Println("Error reading file:", err)
+		return
+	}
+
+	nodeName := strings.TrimSpace(string(content))
+
+	ser.k8sCli.EtcdPut(localServerName, nodeName)
+
+	var wg sync.WaitGroup // WaitGroup 用于等待所有 goroutine 完成
+	for _, server := range servers {
+		serverIP := server.PodIP
+		serverName := server.PodName
+		if localIpaddr != serverIP {
+			wg.Add(1) // 增加 WaitGroup 的计数器
+
+			go func(serverIP, serverName string) {
+				defer wg.Done() // 减少 WaitGroup 的计数器
+
+				_, avgRTT, err := runPingCommand(serverIP, "2", "0.1")
+				otherName, _ := ser.k8sCli.EtcdGet(serverName)
+				if err != nil {
+					avgRTT = "9999"
+				}
+				ch <- fmt.Sprintf("/%sand%s/delay: %s\n", nodeName, otherName, avgRTT)
+			}(serverIP, serverName)
+		}
+	}
+
+	go func() {
+		wg.Wait() // 等待所有 goroutine 完成
+		close(ch) // 关闭通道，表示数据发送完成
+	}()
+
+	var result strings.Builder
+	for data := range ch {
+		result.WriteString(data)
+	}
+
+	err = os.WriteFile("node/data3.txt", []byte(result.String()), 0644)
 	if err != nil {
 		fmt.Println("Error writing to file:", err)
 	}
@@ -554,9 +728,12 @@ func runIperfCommand(serverIp string) (string, error) {
 		return "", err
 	}
 	lastline := extractLastLine(string(output))
-	return lastline, err
+	parts := strings.Split(lastline, " ")
+	bandwidth := parts[len(parts)-2] + parts[len(parts)-1]
+	return bandwidth, err
 }
 
+// 提取bandwidth结果最后一行指定字段
 func extractLastLine(output string) string {
 	lines := strings.Split(output, "\n")
 	if len(lines) > 0 {
@@ -565,9 +742,9 @@ func extractLastLine(output string) string {
 	return ""
 }
 
-// 实现客户端发送ping命令（测4次的平均时延以及数据丢失率）
-func runPingCommand(serverIp string) (string, string, error) {
-	cmd := exec.Command("ping", "-c", "4", serverIp)
+// 实现客户端发送ping命令（测指定次数的平均时延以及数据丢失率）
+func runPingCommand(serverIp string, times string, interval string) (string, string, error) {
+	cmd := exec.Command("ping", "-c", times, "-i", interval, "-W", "1", serverIp)
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	err := cmd.Run()

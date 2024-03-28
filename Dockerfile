@@ -9,5 +9,5 @@ WORKDIR /app
 CMD redis-server --port 7777 & \
     sleep 2 && \
     iperf -s & \
-    sleep 3 && \
+    sleep 1 && \
     ./server 2>&1

@@ -10,6 +10,9 @@ eval $(minikube docker-env)
 ./run.sh help
 # build target docker container
 ./run.sh build
+# apply serviceAccount.yaml and clusterrolebinding.yaml
+kubectl apply -f serviceAccount.yaml
+kubectl apply -f clusterrolebinding.yaml
 # deploy 3 proxy agents in k8s cluster
 ./run.sh deploy 3
 ```

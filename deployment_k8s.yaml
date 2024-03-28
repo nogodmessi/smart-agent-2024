@@ -13,10 +13,29 @@ spec:
       labels:
         app: proxy-app
     spec:
+      terminationGracePeriodSeconds: 0
       serviceAccountName: smart-agent-reader
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: app   # 用于节点的标签键
+                operator: In
+                values:
+                - proxy-app    # 与标签键匹配的值
+      volumes:
+      - name: node-volume
+        hostPath:
+          path: /home/cn/node/
+          type: DirectoryOrCreate
       containers:
         - name: my-agent
-          image: docker.io/nogodmessi/smart-agent:latest
+          image: docker.io/library/my-agent
+          imagePullPolicy: IfNotPresent
+          volumeMounts:
+          - name: node-volume
+            mountPath: /app/node/
           ports:
             - containerPort: 8081
               protocol: TCP
@@ -24,7 +43,12 @@ spec:
               protocol: TCP
             - containerPort: 8083
               protocol: UDP
-            
+          resources: # 这里添加资源请求和限制
+            requests:
+              cpu: "500m" # 请求至少0.5核的CPU
+            limits:
+              cpu: "2000m" # 限制最多1核的CPU
+   
 
 ---
 apiVersion: v1
