@@ -580,7 +580,7 @@ func (cli *AgentClient) sendFileToNode(filePath string) {
 		util.SendNetMessage(cli.conn, config.ClientDataToLocal, line)
 	}
 	// disconn Between server and Node
-	util.SendNetMessage(cli.conn, config.CreateConnBetweenServerAndNode, "")
+	util.SendNetMessage(cli.conn, config.DisconnBetweenServerAndNode, "")
 }
 
 func (cli *AgentClient) fetchClientData(clientId string) {
