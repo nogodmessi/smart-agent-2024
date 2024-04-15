@@ -5,7 +5,6 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -113,33 +112,17 @@ func CreateMptcpConnection(ip string, port int32) (*os.File, net.Conn) {
 }
 
 func getSockProto() int {
-	// Command to execute
-	command := "gcc -v -E -x c /dev/null 2>&1 | grep '^ /' | sed '1d'"
+	command := "grep MPTCP /usr/include/linux/in.h"
 	output, err := exec.Command("bash", "-c", command).Output()
 	if err != nil {
-		fmt.Println("Failed to find c header directory in system:", err)
+		// fmt.Printf("Cannot find mptcp in %s\n", socketpath)
 		return 0
 	}
-	dirs := strings.Split(string(output), "\n")
-	for _, dir := range dirs {
-		socketpath := path.Join(strings.TrimLeft(dir, " "), "netinet/in.h")
-		if _, err := os.Stat(socketpath); err != nil {
-			continue
-		}
-		command = fmt.Sprintf("cat %s | grep 'IPPROTO_MPTCP ='", socketpath)
-		output, err = exec.Command("bash", "-c", command).Output()
-		if err != nil {
-			// fmt.Printf("Cannot find mptcp in %s\n", socketpath)
-			return 0
-		}
-		re := regexp.MustCompile(`\d+`)
-		mptcpCode, err := strconv.Atoi(re.FindString(string(output)))
-		if err != nil {
-			fmt.Printf("Failed to fetch mptcp code from output %s: %v", output, err)
-			return 0
-		}
-		return mptcpCode
+	re := regexp.MustCompile(`\d+`)
+	mptcpCode, err := strconv.Atoi(re.FindString(string(output)))
+	if err != nil {
+		fmt.Printf("Failed to fetch mptcp code from output %s: %v", output, err)
+		return 0
 	}
-	fmt.Println("Failed to find socket header file in any directory")
-	return 0
+	return mptcpCode
 }
