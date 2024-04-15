@@ -1,7 +1,7 @@
 FROM ubuntu:latest
 
 RUN sed -i 's/archive.ubuntu.com/mirrors.ustc.edu.cn/g' /etc/apt/sources.list
-RUN apt-get update && apt-get install -y redis-server gcc inetutils-ping netcat net-tools iperf
+RUN apt-get update && apt-get install -y redis-server inetutils-ping netcat net-tools iperf
 
 COPY server /app/server
 
