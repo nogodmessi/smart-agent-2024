@@ -146,7 +146,7 @@ func main() {
 		defer wg.Done()
 		for {
 			ser.GetBandwidthAwareness()
-			time.Sleep(1 * time.Second)
+			time.Sleep(8 * time.Second)
 		}
 	}()
 
@@ -554,6 +554,7 @@ func (ser *AgentServer) GetBandwidthAwareness() {
 	for _, server := range servers {
 		if localIpaddr == server.PodIP {
 			localServerName = server.PodName
+			break
 		}
 	}
 	content, err1 := ioutil.ReadFile("node/node.txt")
@@ -564,7 +565,8 @@ func (ser *AgentServer) GetBandwidthAwareness() {
 	nodeName := strings.TrimSpace(string(content))
 	ser.k8sCli.EtcdPut(localServerName, nodeName)
 
-	var wg sync.WaitGroup // WaitGroup用于等待所有goroutine完成
+	var wg sync.WaitGroup   // WaitGroup用于等待所有goroutine完成
+	startTime := time.Now() // 开始记录时间
 	for _, server := range servers {
 		serverIp := server.PodIP
 		serverName := server.PodName
@@ -576,7 +578,7 @@ func (ser *AgentServer) GetBandwidthAwareness() {
 
 				result, err := runIperfCommand(serverIp)
 				otherName, _ := ser.k8sCli.EtcdGet(serverName)
-				if err != nil {
+				if err != nil || !strings.HasSuffix(result, "Mbits/sec") {
 					result = "0Mbits/sec"
 				}
 				ch <- fmt.Sprintf("/%sand%s/bandwidth: %s\n", nodeName, otherName, result)
@@ -585,8 +587,10 @@ func (ser *AgentServer) GetBandwidthAwareness() {
 	}
 
 	go func() {
-		wg.Wait() // 等待所有goroutine完成
-		close(ch) // 关闭通道，表示数据发送完成
+		wg.Wait()             // 等待所有goroutine完成
+		close(ch)             // 关闭通道，表示数据发送完成
+		endTime := time.Now() // 结束记录时间
+		log.Printf("态势感知完成，总耗时: %v\n", endTime.Sub(startTime))
 	}()
 
 	var result strings.Builder
@@ -635,7 +639,6 @@ func (ser *AgentServer) GetLossAwareness() {
 				packetLoss, _, err := runPingCommand(serverIP, "50", "0.01")
 
 				otherName, _ := ser.k8sCli.EtcdGet(serverName)
-				log.Println("Loss test %s", otherName)
 				if err != nil {
 					log.Println("Failed to get Loss:", err)
 					packetLoss = "100%"
