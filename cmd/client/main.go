@@ -320,6 +320,7 @@ func (cli *AgentClient) showService() {
 	fmt.Printf("%-20s %-25s %-15s %-15s\n", headers[0], headers[1], headers[2], headers[3])
 	fmt.Println(strings.Repeat("-", 70))
 	for _, info := range cli.serverInfo {
+		// TODO ip地址修改
 		fmt.Printf("%-20s %-25s %-15s %-15s\n", info.serviceName, fmt.Sprintf("%s:%d", cli.k8sIp, info.proxyPort),
 			fmt.Sprintf("%.3fms", float64(info.delay.Abs().Microseconds())/1000), fmt.Sprintf("%.3f", cli.getPingDelayJitter(info.pingPort)))
 	}
@@ -435,6 +436,7 @@ func (cli *AgentClient) getPingDelayJitter(port int32) float64 {
 	return variance
 }
 
+// TODO 感觉有问题
 func (cli *AgentClient) connectToService(svcName string) {
 	proxyPort := cli.findProxyPort(svcName)
 	clusterIp := cli.findTransferIp(svcName)
@@ -442,7 +444,7 @@ func (cli *AgentClient) connectToService(svcName string) {
 	cli.prevClusterIp = cli.currClusterIp
 	cli.currClusterIp = clusterIp
 	fmt.Printf("change cluster ip from %s to %s\n", cli.prevClusterIp, cli.currClusterIp)
-	cli.connectToIpPort(cli.k8sIp, proxyPort)
+	cli.connectToIpPort(cli.k8sIp, proxyPort) // 不一定是master节点，集群中任一节点都可以
 }
 
 // used for local debugging

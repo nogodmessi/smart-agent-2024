@@ -19,8 +19,8 @@ fi
 
 printHelp() {
     echo 'Usage: ./run.sh [build|deploy|show|clean|log|ssh]'
-	echo '  ./run.sh build'
-	echo '      build agent container'
+	  echo '  ./run.sh build'
+	  echo '      build agent container'
     echo '  ./run.sh deploy n'
     echo '      deploy n proxy agents in k8s'
     echo '  ./run.sh show'
@@ -31,6 +31,10 @@ printHelp() {
     echo "      display the ith agent's log"
     echo '  ./run.sh ssh i'
     echo "      use ssh to connect into the ith agent"
+    echo '  ./run.sh get'
+    echo '      display all smart-agent in target namespace'
+    echo '  ./run.sh describe i'
+    echo '      describe i smart-agent details'
 }
 
 createResourceNeeded() {
@@ -73,7 +77,7 @@ deployNAgents() {
         sed "s/${DEPLOY}/\0${i}/" $deploy_file > $deploy_temp
         sed -i "s/${PROXY_SERVICE}/\0${i}/" $deploy_temp
         sed -i "s/${CLUSTER_SERVICE}/\0${i}/" $deploy_temp
-	    sed -i "s/${SELECTOR_APP}/\0${i}/" $deploy_temp
+	      sed -i "s/${SELECTOR_APP}/\0${i}/" $deploy_temp
         $K apply -f $deploy_temp
         rm $deploy_temp
     done
@@ -108,6 +112,7 @@ elif [[ "$1" == "show" ]]; then
     $K get deployment -n ${NAMESPACE}
     echo "Configmap:"
     $K get configmap $CONFIGMAP -n ${NAMESPACE} -o jsonpath='{.data}'
+    echo ""
 elif [[ "$1" == "clean" ]]; then
     clean
 elif [[ "$1" == "log" ]]; then
@@ -119,6 +124,15 @@ elif [[ "$1" == "ssh" ]]; then
     [[ $# < 2 ]] && exit 0
     podname=$($K get pods -n ${NAMESPACE} | grep "${DEPLOY}${2}" | awk '{print $1}')
     $K exec -it $podname -n ${NAMESPACE} -- /bin/sh
+elif [[ "$1" == "get" ]]; then
+    echo "Smart-agents:"
+    $K get po -n ${NAMESPACE} -o wide
+    echo ""
+elif [[ "$1" == "describe" ]]; then
+    [[ $# < 2 ]] && exit 0
+    podname=$($K get pods -n ${NAMESPACE} | grep "${DEPLOY}${2}" | awk '{print $1}')
+    $K describe pod $podname -n ${NAMESPACE}
+    echo ""
 else
     printHelp
 fi
