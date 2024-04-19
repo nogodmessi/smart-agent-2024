@@ -68,7 +68,7 @@ func main() {
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(6)
+	wg.Add(5)
 
 	go func() {
 		defer wg.Done()
@@ -139,14 +139,6 @@ func main() {
 		defer wg.Done()
 		for {
 			ser.GetLossAwareness()
-		}
-	}()
-
-	go func() {
-		defer wg.Done()
-		for {
-			ser.GetBandwidthAwareness()
-			time.Sleep(8 * time.Second)
 		}
 	}()
 
