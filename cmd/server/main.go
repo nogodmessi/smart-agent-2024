@@ -246,9 +246,9 @@ func (ser *AgentServer) handleClient(conn net.Conn) {
 			}
 		}
 		endTransfer := func() {
-			if receiverClusterIp == "" {
-				log.Fatalln("receiver cluster ip is empty when sending data")
-			}
+			//if receiverClusterIp == "" {
+			//	log.Fatalln("receiver cluster ip is empty when sending data")
+			//}
 			if receiverClusterIp != currClusterIp {
 				if transferConn != nil {
 					util.SendNetMessage(transferConn, config.TransferEnd, "")
@@ -360,6 +360,7 @@ func (ser *AgentServer) handleClient(conn net.Conn) {
 				if len(bufferedData) > 0 {
 					<-exitWaitCh
 				}
+				// TODO 当前不需要接收方连接云化代理，所以不需要判断
 				endTransfer()
 				select {
 				case exitCh <- true:
@@ -392,12 +393,19 @@ func (ser *AgentServer) handleClient(conn net.Conn) {
 					log.Fatalln("Failed to create connection when server transfer to node")
 				}
 			} else if cmd == config.ClientDataToLocal {
+				_, clientId := util.RecvNetMessage(conn)
+				// 在传输数据到Node之前需要在云化代理的本地缓存中记录数据
+				log.Println("rpush", clientId, data)
+				ser.redisCli.RPush(context.Background(), clientId, data)
+
+				// 转发数据到Node上
 				_, err := ser.connWithNode.Write([]byte(data))
 				if err != nil {
 					fmt.Println("Error sending data to node:", err)
 					return
 				}
 			} else if cmd == config.DisconnBetweenServerAndNode {
+				log.Println("agent and node close the connection")
 				ser.connWithNode.Close()
 			}
 		}

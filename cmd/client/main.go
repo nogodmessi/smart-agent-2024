@@ -580,6 +580,7 @@ func (cli *AgentClient) sendFileToNode(filePath string) {
 	for scanner.Scan() {
 		line := scanner.Text()
 		util.SendNetMessage(cli.conn, config.ClientDataToLocal, line)
+		util.SendNetMessage(cli.conn, config.ClientId, cli.clientId)
 	}
 	// disconn Between server and Node
 	util.SendNetMessage(cli.conn, config.DisconnBetweenServerAndNode, "")

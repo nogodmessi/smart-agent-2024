@@ -24,7 +24,7 @@ const (
 	ClientServePort  = 8081
 	DataTransferPort = 8082
 	PingPort         = 8083
-	ClientNode       = 30100
+	ClientNode       = 40100
 
 	RoleSender   = "sender"
 	RoleReceiver = "receiver"
