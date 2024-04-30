@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"fmt"
@@ -41,6 +42,7 @@ type AgentServer struct {
 	k8sCli       *service.K8SClient
 	mu           sync.Mutex
 	connWithNode net.Conn
+	isFirstData  bool
 }
 
 func main() {
@@ -65,6 +67,7 @@ func main() {
 		senderMap:   make(map[string]SenderRecord),
 		bufferMap:   make(map[string]SenderBuffer),
 		k8sCli:      service.NewK8SClientInCluster(),
+		isFirstData: true,
 	}
 
 	var wg sync.WaitGroup
@@ -189,6 +192,14 @@ func (ser *AgentServer) handleClient(conn net.Conn) {
 	priority, _ := strconv.Atoi(cliPriorityStr)
 	_, currClusterIp := util.RecvNetMessage(conn)
 
+	// 实现读取宿主机的物理ip地址，并存到map中
+	nodeIP, err := ioutil.ReadFile("node/ip.txt")
+	if err != nil {
+		log.Println("Error reading node IP file :", err)
+		return
+	}
+	key := cliId + "nodeIP"
+	ser.k8sCli.EtcdPut(key, string(nodeIP))
 	if ser.myClusterIp == "" {
 		ser.myClusterIp = currClusterIp
 		log.Printf("my cluster ip = %s\n", ser.myClusterIp)
@@ -264,6 +275,7 @@ func (ser *AgentServer) handleClient(conn net.Conn) {
 			}
 			if receiverClusterIp != currClusterIp {
 				if transferConn == nil {
+					// 和对端的云化代理建立通信并发送两个指令
 					beginTransfer()
 				}
 				for _, data := range bufferedData {
@@ -284,6 +296,7 @@ func (ser *AgentServer) handleClient(conn net.Conn) {
 			}
 			if receiverClusterIp != currClusterIp {
 				if transferConn == nil {
+					// 发送方连接的云化代理与接收方所连接的云化代理建立三次握手阶段
 					beginTransfer()
 				}
 				log.Printf("send %s to %s\n", data, receiverClusterIp)
@@ -337,6 +350,7 @@ func (ser *AgentServer) handleClient(conn net.Conn) {
 
 		for {
 			cmd, data := util.RecvNetMessage(conn)
+			log.Println("将要转发的数据为:", data)
 			if cmd == config.ClientData {
 				// if the peer hasn't connected into k8s, buffer the data first
 				if receiverClusterIp == "" {
@@ -398,6 +412,20 @@ func (ser *AgentServer) handleClient(conn net.Conn) {
 				log.Println("rpush", clientId, data)
 				ser.redisCli.RPush(context.Background(), clientId, data)
 
+				if ser.isFirstData {
+					key := receiverId + "nodeIP"
+					ip, _ := ser.k8sCli.EtcdGet(key)
+					parts := strings.Split(data, "|")
+					if len(parts) >= 3 {
+						if net.ParseIP(parts[2]) != nil {
+							// Replace the IP address in data with the retrieved IP
+							parts[2] = ip
+							data = strings.Join(parts, "|")
+							ser.isFirstData = false
+						}
+					}
+
+				}
 				// 转发数据到Node上
 				_, err := ser.connWithNode.Write([]byte(data))
 				if err != nil {
@@ -407,6 +435,7 @@ func (ser *AgentServer) handleClient(conn net.Conn) {
 			} else if cmd == config.DisconnBetweenServerAndNode {
 				log.Println("agent and node close the connection")
 				ser.connWithNode.Close()
+				ser.isFirstData = true
 			}
 		}
 	} else if clientType == config.RoleReceiver {
@@ -417,7 +446,48 @@ func (ser *AgentServer) handleClient(conn net.Conn) {
 			_, senderId := util.RecvNetMessage(conn)
 			senderIds = append(senderIds, senderId)
 		}
+
 		log.Printf("%s recv from %d senders: %v\n", cliId, recvNum, senderIds)
+
+		go func() {
+			for {
+				for {
+					content, err := ioutil.ReadFile("node/flag.txt")
+					if err != nil {
+						log.Println("Error reading file:", err)
+						return
+					}
+					flag := strings.TrimSpace(string(content))
+					if flag == "Ready" {
+						break
+					}
+					time.Sleep(time.Millisecond * 2000)
+				}
+				// 读取node/file.txt文件中的内容转发给接收端
+				fileContent, err := ioutil.ReadFile("node/file.txt")
+				if err != nil {
+					log.Println("Error reading file:", err)
+					return
+				}
+				scanner := bufio.NewScanner(strings.NewReader(string(fileContent)))
+				for scanner.Scan() {
+					line := scanner.Text()
+					util.SendNetMessage(conn, config.ClientData, line)
+				}
+				util.SendNetMessage(conn, config.TransferEnd, "")
+				if err := scanner.Err(); err != nil {
+					log.Println("Error scanning file content:", err)
+					return
+				}
+				err = ioutil.WriteFile("node/flag.txt", []byte("NotReady"), 0644)
+				if err != nil {
+					log.Println("Error writing file:", err)
+					return
+				}
+				log.Println("flag.txt file updated successfully")
+
+			}
+		}()
 		wg := sync.WaitGroup{}
 		wg.Add(len(senderIds))
 		for _, senderId := range senderIds {
@@ -544,66 +614,6 @@ func (ser *AgentServer) handleTransfer(conn net.Conn) {
 	}
 }
 
-// 进行带宽测试
-func (ser *AgentServer) GetBandwidthAwareness() {
-	servers := ser.k8sCli.GetNameSpacePods(config.Namespace)
-	ch := make(chan string, len(servers))
-	localIpaddr := getIPv4ForInterface("eth0")
-
-	localServerName := ""
-	for _, server := range servers {
-		if localIpaddr == server.PodIP {
-			localServerName = server.PodName
-			break
-		}
-	}
-	content, err1 := ioutil.ReadFile("node/node.txt")
-	if err1 != nil {
-		fmt.Println("Error reading file:", err1)
-		return
-	}
-	nodeName := strings.TrimSpace(string(content))
-	ser.k8sCli.EtcdPut(localServerName, nodeName)
-
-	var wg sync.WaitGroup   // WaitGroup用于等待所有goroutine完成
-	startTime := time.Now() // 开始记录时间
-	for _, server := range servers {
-		serverIp := server.PodIP
-		serverName := server.PodName
-		if localIpaddr != serverIp {
-			wg.Add(1) // 增加WaitGroup的计数器
-
-			go func(serverIp, serverName string) {
-				defer wg.Done() // 减少WaitGroup的计数器
-
-				result, err := runIperfCommand(serverIp)
-				otherName, _ := ser.k8sCli.EtcdGet(serverName)
-				if err != nil || !strings.HasSuffix(result, "Mbits/sec") {
-					result = "0Mbits/sec"
-				}
-				ch <- fmt.Sprintf("/%sand%s/bandwidth: %s\n", nodeName, otherName, result)
-			}(serverIp, serverName)
-		}
-	}
-
-	go func() {
-		wg.Wait()             // 等待所有goroutine完成
-		close(ch)             // 关闭通道，表示数据发送完成
-		endTime := time.Now() // 结束记录时间
-		log.Printf("态势感知完成，总耗时: %v\n", endTime.Sub(startTime))
-	}()
-
-	var result strings.Builder
-	for data := range ch {
-		result.WriteString(data)
-	}
-
-	err := os.WriteFile("node/data2.txt", []byte(result.String()), 0644)
-	if err != nil {
-		fmt.Println("Error writing to file:", err)
-	}
-}
-
 // 丢包率测试
 func (ser *AgentServer) GetLossAwareness() {
 	servers := ser.k8sCli.GetNameSpacePods(config.Namespace)
@@ -722,29 +732,6 @@ func (ser *AgentServer) GetLatencyAwareness() {
 	}
 }
 
-// 实现客户端发送iperf命令 （测试吞吐量以及带宽）
-func runIperfCommand(serverIp string) (string, error) {
-	cmd := exec.Command("iperf", "-c", serverIp, "-t", "1")
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		fmt.Println("Error running iperf command:", err)
-		return "", err
-	}
-	lastline := extractLastLine(string(output))
-	parts := strings.Split(lastline, " ")
-	bandwidth := parts[len(parts)-2] + parts[len(parts)-1]
-	return bandwidth, err
-}
-
-// 提取bandwidth结果最后一行指定字段
-func extractLastLine(output string) string {
-	lines := strings.Split(output, "\n")
-	if len(lines) > 0 {
-		return lines[len(lines)-2]
-	}
-	return ""
-}
-
 // 实现客户端发送ping命令（测指定次数的平均时延以及数据丢失率）
 func runPingCommand(serverIp string, times string, interval string) (string, string, error) {
 	cmd := exec.Command("ping", "-c", times, "-i", interval, "-W", "1", serverIp)
@@ -756,7 +743,6 @@ func runPingCommand(serverIp string, times string, interval string) (string, str
 	}
 	output := out.String()
 	lines := strings.Split(output, "\n")
-	fmt.Println(len(lines))
 	packetLossLine := lines[len(lines)-3]
 	statisticsLine := lines[len(lines)-2]
 
