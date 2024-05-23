@@ -1,5 +1,6 @@
 ### 项目架构图
-![Uploading image.png…]()
+<img width="487" alt="c9767f45df5cf32094496f2013a34b2" src="https://github.com/nogodmessi/smart-agent-2024/assets/127720917/a3faad98-407b-416a-87b6-f88a64290e63">
+
 
 
 ### run servers on minikube
