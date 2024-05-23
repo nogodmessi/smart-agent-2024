@@ -1,5 +1,25 @@
 ### 项目架构图
-<img width="487" alt="c9767f45df5cf32094496f2013a34b2" src="https://github.com/nogodmessi/smart-agent-2024/assets/127720917/a3faad98-407b-416a-87b6-f88a64290e63">
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Center Image Example</title>
+    <style>
+        .center {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh; /* 可选，取决于是否需要垂直居中 */
+        }
+    </style>
+</head>
+<body>
+    <div class="center">
+        <img src="https://github.com/nogodmessi/smart-agent-2024/assets/127720917/a3faad98-407b-416a-87b6-f88a64290e63" alt="Centered Image">
+    </div>
+</body>
+</html>
 
 
 
