@@ -1,3 +1,7 @@
+### 项目架构图
+![Uploading image.png…]()
+
+
 ### run servers on minikube
 
 - install `minikube`
