@@ -32,6 +32,9 @@ kubectl apply -f clusterrolebinding.yaml
 ### run servers on kubernetes
 
 ```sh
+# (master) apply serviceAccount.yaml and clusterrolebinding.yaml
+kubectl apply -f serviceAccount.yaml
+kubectl apply -f clusterrolebinding.yaml
 # deploy n proxy agents in kubernetes
 ./run.sh deploy n
 # clean all proxy agents
