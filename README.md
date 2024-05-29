@@ -10,7 +10,7 @@
 
 
 
-### run servers on minikube
+### run servers on minikube  (K8s master)
 
 - install `minikube`
 - install `go 1.20`
@@ -29,7 +29,7 @@ kubectl apply -f clusterrolebinding.yaml
 ./run.sh deploy 3
 ```
 
-### run servers on kubernetes
+### run servers on kubernetes  (K8s master)
 
 ```sh
 # (master) apply serviceAccount.yaml and clusterrolebinding.yaml
@@ -41,7 +41,7 @@ kubectl apply -f clusterrolebinding.yaml
 ./run.sh clean
 ```
 
-### run client
+### run client 
 
 ```sh
 # build and run client
